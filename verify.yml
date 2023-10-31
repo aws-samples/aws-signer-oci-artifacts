@@ -1,0 +1,30 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - wget https://d2hvyiie56hcat.cloudfront.net/linux/amd64/installer/rpm/latest/aws-signer-notation-cli_amd64.rpm
+      - sudo rpm -U aws-signer-notation-cli_amd64.rpm
+      - VERSION="1.0.0"
+      - curl -LO "https://github.com/oras-project/oras/releases/download/v${VERSION}/oras_${VERSION}_linux_amd64.tar.gz"
+      - mkdir -p oras-install/
+      - tar -zxf oras_${VERSION}_*.tar.gz -C oras-install/
+      - sudo mv oras-install/oras /usr/local/bin/
+      - ACCOUNT_ID=$(echo $CODEBUILD_BUILD_ARN | cut -f5 -d ':')
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      - echo '{"version":"1.0","trustPolicies":[{"name":"aws-signer-tp","registryScopes":["*"],"signatureVerification":{"level":"strict"},"trustStores":["signingAuthority:aws-signer-ts"],"trustedIdentities":["'"$SIGNER_PROFILE_ARN"'"]}]}' | cat > policy.json
+      - cat policy.json
+  build:
+    commands:
+      - CVEDIGEST=`oras discover -o json $REPOSITORY_URI:latest | jq -r '.manifests[0].digest'`
+      - SBOMDIGEST=`oras discover -o json $REPOSITORY_URI:latest | jq -r '.manifests[1].digest'`
+      - notation policy import policy.json --force
+      - notation verify $REPOSITORY_URI:latest
+      - notation verify $REPOSITORY_URI@$CVEDIGEST
+      - notation verify $REPOSITORY_URI@$SBOMDIGEST
+      - printf '[{"name":"signer-fargate-container","imageUri":"%s"}]' $REPOSITORY_URI:latest > imagedefinitions.json
+artifacts:
+  files: imagedefinitions.json
